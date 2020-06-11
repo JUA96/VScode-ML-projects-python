@@ -8,6 +8,13 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
+import calendar
+
+# Stats packages
+from statsmodels.tsa.stattools import acf, adfuller
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.arima_model import ARIMA
+from statsmodels.tsa.seasonal import seasonal_decompose
 
 # Machine learning packages
 from sklearn.model_selection import train_test_split, cross_val_score
@@ -413,3 +420,164 @@ trend.set(ylabel = ' Trend (arbitrary units)')
 fig.tight_layout()
 plt.show()
 
+
+
+# Plot showing persons entering between 2015 and 2018 by most popular month
+start = '2015'
+end = '2018'
+pcsm = people_crossing_series.loc[start:end]
+
+fig, ax = plt.subplots(2,figsize = (18,13))
+
+for i in range(11) :
+    mm = pcsm[pcsm.index.month == i] 
+    ax[0].plot(mm, label = calendar.month_abbr[i])
+    ax[1].plot(mm/mm.sum(), label = calendar.month_abbr[i])
+    
+ax[0].set(title = 'persons entering the US between {} and {}, total by months'.format(start, end),
+         ylabel = '# people')
+ax[1].set(title = 'persons entering the US between {} and {}, trend by months'.format(start, end),
+         ylabel = 'arbitrary units')
+ax[0].legend()
+ax[1].legend()
+
+plt.show()
+
+# Plot showing monthly trends between 2015 and 2018 (normalized)
+start = '2011'
+end = '2018'
+pcsm = people_crossing_series.loc[start:end]
+months = [calendar.month_abbr[m] for m in range(1,13)]
+fig, ax = plt.subplots(2,figsize = (18,13))
+
+start = int(start)
+end = int(end)
+
+for i in range(start, end) :
+    yy = pcsm[pcsm.index.year == i];
+    yy = yy.set_index(yy.index.month);
+    ax[0].plot(yy
+               , label = i)
+    ax[1].plot(yy/yy.sum()
+               , label = i)
+    
+ax[0].set(title = 'persons entering the US between {} and {}, total by years'.format(start, end),
+         ylabel = '# people')
+
+ax[1].set(title = 'persons entering the US between {} and {}, seasonal (normalised)'.format(start, end),
+         ylabel = 'arbitrary units')
+
+plt.setp(ax, xticks = range(1,13), xticklabels = months)
+ax[0].legend()
+plt.tight_layout()
+plt.show()
+
+
+
+#3: SEASONAL DECOMPOSITION
+pcsm = people_crossing_series.loc['2015':]
+res_mul = seasonal_decompose(pcsm, model='multiplicative', extrapolate_trend='freq')
+res_add = seasonal_decompose(pcsm, model='additive', extrapolate_trend='freq')
+
+# Plot
+fig, axes = plt.subplots(ncols=2, nrows=4, sharex=True, figsize=(15,8))
+
+res_mul.observed.plot(ax=axes[0,0], legend=False)
+axes[0,0].set_ylabel('Observed')
+
+res_mul.trend.plot(ax=axes[1,0], legend=False)
+axes[1,0].set_ylabel('Trend')
+
+res_mul.seasonal.plot(ax=axes[2,0], legend=False)
+axes[2,0].set_ylabel('Seasonal')
+
+res_mul.resid.plot(ax=axes[3,0], legend=False)
+axes[3,0].set_ylabel('Residual')
+
+res_add.observed.plot(ax=axes[0,1], legend=False)
+axes[0,1].set_ylabel('Observed')
+
+res_add.trend.plot(ax=axes[1,1], legend=False)
+axes[1,1].set_ylabel('Trend')
+
+res_add.seasonal.plot(ax=axes[2,1], legend=False)
+axes[2,1].set_ylabel('Seasonal')
+
+res_add.resid.plot(ax=axes[3,1], legend=False)
+axes[3,1].set_ylabel('Residual')
+
+axes[0,0].set_title('Multiplicative')
+axes[0,1].set_title('Additive')
+    
+plt.tight_layout()
+plt.show()
+
+# Trend vs Residuals
+des = res_mul.trend * res_mul.resid
+des.plot(figsize = (15,10))
+plt.show()
+
+
+# ADF statistic to test null hypothesis
+index_list = des.index
+values = list(des)
+d = {'Value':values} 
+des = pd.DataFrame(d, index = index_list) 
+result = adfuller(des.Value.dropna())
+print('ADF Statistic: %f' % result[0])
+print('p-value: %f' % result[1])
+
+# Check for autocorrelation in the time series:
+fig, axes = plt.subplots(3, 2, figsize=(16,10))
+
+axes[0, 0].plot(des.Value)
+axes[0, 0].set_title('Original Series')
+plot_acf(des, ax=axes[0, 1])
+
+axes[1, 0].plot(des.Value.diff()); axes[1, 0].set_title('1st Order Differentiation')
+plot_acf(des.diff().dropna(), ax=axes[1, 1])
+
+axes[2, 0].plot(des.diff().diff()); axes[2, 0].set_title('2nd Order Differentiation')
+plot_acf(des.diff().diff().dropna(), ax=axes[2, 1])
+
+plt.tight_layout()
+plt.show()
+
+# ARIMA Model
+model = ARIMA(des, order=(0,1,1))
+model_fit = model.fit(disp=0)
+print(model_fit.summary())
+
+# Plot residuals, density and autocorrelation
+residuals = pd.DataFrame(model_fit.resid)
+fig, ax = plt.subplots(2,2, figsize=(15,8))
+residuals.plot(title="Residuals", ax=ax[0,0])
+residuals.plot(kind='kde', title='Density', ax=ax[0,1])
+plot_acf(model_fit.resid.dropna(), ax=ax[1,0])
+plt.tight_layout()
+plt.show()
+
+# Check the forecast vs the actual value 
+model_fit.plot_predict()
+plt.show()
+
+# Check the forecasted values 
+train = des[:74]
+test = des[74:]
+model_train = ARIMA(train, order=(0,1,1))  
+
+fitted_train = model_train.fit(disp=-1)  
+fc, se, conf = fitted_train.forecast(36, alpha=0.05)  # 95% conf
+fc_series = pd.Series(fc, index=test.index)
+lower_series = pd.Series(conf[:, 0], index=test.index)
+upper_series = pd.Series(conf[:, 1], index=test.index)
+
+plt.figure(figsize=(15,8))
+plt.plot(train, label='training')
+plt.plot(test, label='actual')
+plt.plot(fc_series, label='forecast')
+plt.fill_between(lower_series.index, lower_series, upper_series, 
+                 color='k', alpha=.15)
+plt.title('Forecast vs Actuals')
+plt.legend(loc='upper left', fontsize=8)
+plt.show()
